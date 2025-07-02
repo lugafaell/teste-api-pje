@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  # Nginx Proxy Manager
+  nginx-proxy-manager:
+    image: 'jc21/nginx-proxy-manager:latest'
+    container_name: npm
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+      - '81:81'
+    volumes:
+      - npm_data:/data
+      - npm_letsencrypt:/etc/letsencrypt
+    networks:
+      - app-network
+    environment:
+      - DISABLE_IPV6=true
+
+  # PJe API
+  pje-api:
+    build: .
+    container_name: pje-sso-automator
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5001:5001"  # Apenas localhost para segurança
+    environment:
+      - BUBBLE_API_ENDPOINT=${BUBBLE_API_ENDPOINT}
+      - DEBUG_MODE=${DEBUG_MODE:-False}
+      - CACHE_COOKIES=${CACHE_COOKIES:-True}
+      - SAVE_LOG=${SAVE_LOG:-False}
+      - PORT=5001
+    volumes:
+      - ./cache:/app/cache
+    networks:
+      - app-network
+    depends_on:
+      - nginx-proxy-manager
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  npm_data:
+  npm_letsencrypt:
