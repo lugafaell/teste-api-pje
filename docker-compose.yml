@@ -24,7 +24,7 @@ services:
     container_name: pje-sso-automator
     restart: unless-stopped
     ports:
-      - "127.0.0.1:5001:5001"  # Apenas localhost para segurança
+      - "5001:5001"
     environment:
       - BUBBLE_API_ENDPOINT=${BUBBLE_API_ENDPOINT}
       - DEBUG_MODE=${DEBUG_MODE:-False}
