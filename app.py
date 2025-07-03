@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-import requests
+from curl_cffi import requests
 from urllib.parse import parse_qs, urlparse, urlencode
 import re
 import time
@@ -43,7 +43,7 @@ class PJeSSoAutomatorAPI:
     """Versão API do PJeSSoAutomator"""
     
     def __init__(self, verbose=False, save_log=False, cache_cookies=True):
-        self.session = requests.Session()
+        self.session = requests.Session(impersonate="firefox")
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:139.0) Gecko/20100101 Firefox/139.0',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
