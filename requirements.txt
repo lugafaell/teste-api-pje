@@ -4,3 +4,4 @@ beautifulsoup4==4.12.2
 PyPDF2==3.0.1
 python-dotenv==1.0.0
 gunicorn==21.2.0
+curl-cffi==0.7.1
