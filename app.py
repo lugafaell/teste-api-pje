@@ -43,7 +43,8 @@ class PJeSSoAutomatorAPI:
     """Versão API do PJeSSoAutomator"""
     
     def __init__(self, verbose=False, save_log=False, cache_cookies=True):
-        self.session = requests.Session(impersonate="firefox")
+        # Usar curl_cffi com impersonate específico
+        self.session = requests.Session(impersonate="chrome120")
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:139.0) Gecko/20100101 Firefox/139.0',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -102,16 +103,30 @@ class PJeSSoAutomatorAPI:
                 'jsession_id': self.jsession_id
             }
             
-            for cookie in self.session.cookies:
-                cookie_data = {
-                    'name': cookie.name,
-                    'value': cookie.value,
-                    'domain': cookie.domain,
-                    'path': cookie.path,
-                    'secure': cookie.secure,
-                    'expires': cookie.expires
-                }
-                cookies_data['cookies'].append(cookie_data)
+            # Para curl_cffi, acessar cookies pode ser diferente
+            try:
+                for cookie_name, cookie_value in self.session.cookies.items():
+                    cookie_data = {
+                        'name': cookie_name,
+                        'value': cookie_value,
+                        'domain': '',  # curl_cffi pode não expor todos os detalhes
+                        'path': '/',
+                        'secure': True,
+                        'expires': None
+                    }
+                    cookies_data['cookies'].append(cookie_data)
+            except:
+                # Se falhar, pelo menos salvar o JSESSIONID
+                if self.jsession_id:
+                    cookie_data = {
+                        'name': 'JSESSIONID',
+                        'value': self.jsession_id,
+                        'domain': '.pje.trt7.jus.br',
+                        'path': '/',
+                        'secure': True,
+                        'expires': None
+                    }
+                    cookies_data['cookies'].append(cookie_data)
             
             with open(self.cookies_cache_file, 'wb') as f:
                 pickle.dump(cookies_data, f)
@@ -154,14 +169,17 @@ class PJeSSoAutomatorAPI:
                     for cookie_data in cookies_data['cookies']:
                         # Verificar se o cookie não expirou
                         if cookie_data['expires'] is None or cookie_data['expires'] > time.time():
-                            self.session.cookies.set(
-                                cookie_data['name'],
-                                cookie_data['value'],
-                                domain=cookie_data['domain'],
-                                path=cookie_data['path'],
-                                secure=cookie_data['secure']
-                            )
-                            valid_cookies += 1
+                            # Para curl_cffi, pode ser necessário adicionar cookies de forma diferente
+                            try:
+                                self.session.cookies.set(
+                                    cookie_data['name'],
+                                    cookie_data['value']
+                                )
+                                valid_cookies += 1
+                            except:
+                                # Se falhar, pelo menos tentar guardar o valor
+                                if cookie_data['name'] == 'JSESSIONID':
+                                    self.jsession_id = cookie_data['value']
                     
                     self.jsession_id = cookies_data.get('jsession_id')
                     logger.info(f"Cache carregado: {valid_cookies} cookies válidos")
@@ -297,9 +315,29 @@ class PJeSSoAutomatorAPI:
             raise
         
     def extract_cookies_from_response(self, response):
-        """Extrai cookies da resposta e os adiciona à sessão"""
-        for cookie in response.cookies:
-            self.session.cookies.set(cookie.name, cookie.value, domain=cookie.domain)
+        """Extrai cookies da resposta - curl_cffi gerencia automaticamente."""
+        if response is None:
+            return
+            
+        # curl_cffi já gerencia cookies automaticamente na session
+        # Apenas extrair valores específicos se necessário
+        try:
+            # Verificar se há cookies na resposta
+            if hasattr(response, 'cookies'):
+                for key, value in response.cookies.items():
+                    if key == 'JSESSIONID':
+                        self.jsession_id = value
+                        if self.verbose:
+                            logger.debug(f"[COOKIE] JSESSIONID atualizado: {value[:20]}...")
+        except Exception as e:
+            # Se falhar, tentar extrair do header Set-Cookie
+            set_cookie_headers = response.headers.get('set-cookie', '')
+            if set_cookie_headers and 'JSESSIONID' in set_cookie_headers:
+                match = re.search(r'JSESSIONID=([^;]+)', set_cookie_headers)
+                if match:
+                    self.jsession_id = match.group(1)
+                    if self.verbose:
+                        logger.debug(f"[COOKIE] JSESSIONID extraído do header: {self.jsession_id[:20]}...")
             
     def extract_session_info_from_html(self, html_content):
         """Extrai informações de sessão do HTML"""
@@ -781,7 +819,10 @@ class PJeSSoAutomatorAPI:
         }
         
         for cookie_name, cookie_value in tour_cookies.items():
-            self.session.cookies.set(cookie_name, cookie_value, domain='portaldeservicos.pdpj.jus.br', path='/')
+            try:
+                self.session.cookies.set(cookie_name, cookie_value)
+            except:
+                pass  # curl_cffi pode ter comportamento diferente
         
         # Delay para simular navegação
         self.humanize_delay(2, 4)
@@ -1067,7 +1108,9 @@ def enviar_dados_bubble(dados_processo):
     headers = {'Content-Type': 'application/json; charset=utf-8'}
     
     try:
-        response = requests.post(
+        # Usar requests normal para enviar ao Bubble
+        import requests as normal_requests
+        response = normal_requests.post(
             BUBBLE_API_ENDPOINT, 
             headers=headers, 
             data=json_payload.encode('utf-8'), 
@@ -1087,10 +1130,10 @@ def enviar_dados_bubble(dados_processo):
             logger.error(f"Resposta: {response.text[:1000]}...")
             return False
             
-    except requests.exceptions.Timeout:
+    except normal_requests.exceptions.Timeout:
         logger.error(f"Timeout ao enviar dados para o Bubble")
         return False
-    except requests.exceptions.RequestException as e:
+    except normal_requests.exceptions.RequestException as e:
         logger.error(f"Erro na requisição para o Bubble: {e}")
         return False
     except Exception as e:
@@ -1108,6 +1151,27 @@ def health_check():
         'version': '1.0',
         'timestamp': datetime.now().isoformat()
     }), 200
+
+@app.route('/test', methods=['GET'])
+def test_endpoint():
+    """Endpoint de teste para verificar conectividade"""
+    try:
+        # Testar conexão com o PJe usando curl_cffi
+        test_session = requests.Session(impersonate="chrome120")
+        response = test_session.get('https://pje.trt7.jus.br', timeout=10)
+        
+        return jsonify({
+            'status': 'ok',
+            'pje_status': response.status_code,
+            'curl_cffi': 'working',
+            'timestamp': datetime.now().isoformat()
+        }), 200
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
 
 @app.route('/process', methods=['POST'])
 def process_pje():
@@ -1209,7 +1273,9 @@ def processar_async(username, password, numero_processo, callback_url=None):
             # Se houver callback URL, notificar
             if callback_url:
                 try:
-                    requests.post(callback_url, json={
+                    # Usar requests normal para callback
+                    import requests as normal_requests
+                    normal_requests.post(callback_url, json={
                         'success': True,
                         'numero_processo': numero_processo,
                         'timestamp': datetime.now().isoformat()
@@ -1221,7 +1287,8 @@ def processar_async(username, password, numero_processo, callback_url=None):
         logger.error(f"Erro no processamento assíncrono: {e}")
         if callback_url:
             try:
-                requests.post(callback_url, json={
+                import requests as normal_requests
+                normal_requests.post(callback_url, json={
                     'success': False,
                     'numero_processo': numero_processo,
                     'error': str(e),
